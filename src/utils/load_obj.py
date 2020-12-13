@@ -17,6 +17,8 @@ def read_objfile(file_path, return_o3d=False):
     
 def load_pipeline(file_path, bit=8):
     v, f = read_objfile(file_path)
+    
+    v = bit_quantization(v, bit=bit)
     v, f = redirect_same_vertices(v, f)
     
     columns = ["z", "y", "x"]
@@ -25,7 +27,6 @@ def load_pipeline(file_path, bit=8):
     
     f = reorder_faces(v, f)
     v = v.values[:, :3]
-    
-    v = bit_quantization(v, bit=bit)
     f = f.values
+    
     return v, f
