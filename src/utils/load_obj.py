@@ -1,32 +1,42 @@
 import numpy as np
-import pandas as pd
-import open3d as o3d
 from .preprocess import redirect_same_vertices, reorder_vertices, reorder_faces, bit_quantization
 
 
-def read_objfile(file_path, return_o3d=False):
+def read_objfile(file_path):
+    vertices = []
+    normals = []
+    faces = []
     
-    obj = o3d.io.read_triangle_mesh(file_path)
-    if return_o3d:
-        return obj
-    else:
-        v = np.asarray(obj.vertices, dtype=np.float32)
-        f = np.asarray(obj.triangles, dtype=np.int32)
-        return v, f
+    with open(file_path) as fr:
+        for line in fr:
+            data = line.split()
+            if len(data) > 0:
+                if data[0] == "v":
+                    vertices.append(data[1:])
+                elif data[0] == "vn":
+                    normals.append(data[1:])
+                elif data[0] == "f":
+                    face = np.array([
+                        [int(p.split("/")[0]), int(p.split("/")[2])]
+                        for p in data[1:]
+                    ]) - 1
+                    faces.append(face)
+    
+    vertices = np.array(vertices, dtype=np.float32)
+    normals = np.array(normals, dtype=np.float32)
+    return vertices, normals, faces
 
     
-def load_pipeline(file_path, bit=8):
-    v, f = read_objfile(file_path)
+def load_pipeline(file_path, bit=8, remove_normal_ids=True):
+    vs, ns, fs = read_objfile(file_path)
     
-    v = bit_quantization(v, bit=bit)
-    v, f = redirect_same_vertices(v, f)
+    vs = bit_quantization(vs, bit=bit)
+    vs, fs = redirect_same_vertices(vs, fs)
     
-    columns = ["z", "y", "x"]
-    v = pd.DataFrame(v, columns=columns)
-    v = reorder_vertices(v, columns=columns, add_sorted_index=True)
+    vs, ids = reorder_vertices(vs)
+    fs = reorder_faces(fs, ids)
     
-    f = reorder_faces(v, f)
-    v = v.values[:, :3]
-    f = f.values
-    
-    return v, f
+    if remove_normal_ids:
+        fs = [f[:, 0] for f in fs]
+        
+    return vs, ns, fs

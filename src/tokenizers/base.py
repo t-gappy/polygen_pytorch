@@ -19,8 +19,8 @@ class Tokenizer(object):
     def _make_padding_mask(self, ids_tensor, pad_id):
         mask = torch.where(
             ids_tensor==pad_id,
-            torch.ones_like(ids_tensor),
-            torch.zeros_like(ids_tensor)
+            torch.zeros_like(ids_tensor),
+            torch.ones_like(ids_tensor)
         ).type(torch.bool)
         return mask
 
@@ -70,4 +70,3 @@ class Tokenizer(object):
             "padding_mask": padding_mask,
         }
         return outputs
-    

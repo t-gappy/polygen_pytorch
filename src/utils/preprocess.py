@@ -1,12 +1,21 @@
 import numpy as np
-import pandas as pd
+
+
+def bit_quantization(vertices, bit=8, v_min=-1., v_max=1.):
+    # vertices must have values between -1 to 1.
+    dynamic_range = 2 ** bit - 1
+    discrete_interval = (v_max-v_min) / (dynamic_range)#dynamic_range
+    offset = (dynamic_range) / 2
+    
+    vertices = vertices / discrete_interval + offset
+    vertices = np.clip(vertices, 0, dynamic_range-1)
+    return vertices.astype(np.int32)
 
 
 def redirect_same_vertices(vertices, faces):
-    
     faces_with_coord = []
     for face in faces:
-        faces_with_coord.append([tuple(vertices[idx]) for idx in face])
+        faces_with_coord.append([[tuple(vertices[v_idx]), f_idx] for v_idx, f_idx in face])
     
     coord_to_minimum_vertex = {}
     new_vertices = []
@@ -21,42 +30,47 @@ def redirect_same_vertices(vertices, faces):
     
     new_faces = []
     for face in faces_with_coord:
-        new_faces.append([
-            coord_to_minimum_vertex[coord] for coord in face
+        face = np.array([
+            [coord_to_minimum_vertex[coord], f_idx] for coord, f_idx in face
         ])
+        new_faces.append(face)
     
-    return np.stack(new_vertices), np.array(new_faces, dtype=np.int32)
+    return np.stack(new_vertices), new_faces
 
 
-def reorder_vertices(vertices_df, columns=["z", "y", "x"], add_sorted_index=True):
-    # sorting bottom -> top (descending order)
-    vertices_df = vertices_df.sort_values(columns, ascending=False)
+def reorder_vertices(vertices):
+    indeces = np.lexsort(vertices.T[::-1])[::-1]
+    return vertices[indeces], indeces
+
+
+def reorder_faces(faces, sort_v_ids, pad_id=-1):
+    # apply sorted vertice-id and sort in-face-triple values.
     
-    if add_sorted_index:
-        vertices_df["sorted_index"] = np.arange(len(vertices_df))
-    return vertices_df
-
-
-def reorder_faces(vertices_df, faces):
-    # this func contains two sorting: in-face-triple sort and all-face sort.
+    faces_ids = []
     faces_sorted = []
-    for face in faces:
-        face_ids = vertices_df.loc[face]["sorted_index"]
-        face_ids = np.sort(face_ids)
-        faces_sorted.append(face_ids)
+    for f in faces:
+        f = np.stack([
+            np.concatenate([np.where(sort_v_ids==v_idx)[0], np.array([n_idx])])
+            for v_idx, n_idx in f
+        ])
+        f_ids = f[:, 0]
+        
+        max_idx = np.argmax(f_ids)
+        sort_ids = np.arange(len(f_ids))
+        sort_ids = np.concatenate([
+            sort_ids[max_idx:], sort_ids[:max_idx]
+        ])
+        faces_ids.append(f_ids[sort_ids])
+        faces_sorted.append(f[sort_ids])
+        
+    # padding for lexical sorting.
+    max_length = max([len(f) for f in faces_ids])
+    faces_ids = np.array([
+        np.concatenate([f, np.array([pad_id]*(max_length-len(f)))]) 
+        for f in faces_ids
+    ])
     
-    # smaller index in face triple means nearer to bottom.
-    faces_sorted = pd.DataFrame(faces_sorted)
-    faces_sorted = faces_sorted.sort_values(list(range(3)), ascending=True)
-    return pd.DataFrame(faces_sorted)
-
-
-def bit_quantization(vertices, bit=8, v_min=-1., v_max=1.):
-    # vertices must have values between -1 to 1.
-    dynamic_range = 2 ** bit - 1
-    discrete_interval = (v_max-v_min) / dynamic_range
-    offset = (dynamic_range) / 2
-    
-    vertices = vertices / discrete_interval + offset
-    vertices = np.clip(vertices, 0, dynamic_range-1)
-    return vertices.astype(np.int32)
+    # lexical sort over face triples.
+    indeces = np.lexsort(faces_ids.T[::-1])[::-1]
+    faces_sorted = [faces_sorted[idx] for idx in indeces]
+    return faces_sorted
