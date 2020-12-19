@@ -19,8 +19,8 @@ class Tokenizer(object):
     def _make_padding_mask(self, ids_tensor, pad_id):
         mask = torch.where(
             ids_tensor==pad_id,
-            torch.zeros_like(ids_tensor),
-            torch.ones_like(ids_tensor)
+            torch.ones_like(ids_tensor),
+            torch.zeros_like(ids_tensor)
         ).type(torch.bool)
         return mask
 
@@ -34,14 +34,14 @@ class Tokenizer(object):
         ).type(torch.float32)
         return mask
     
-    def get_pred_start(self, batch_size=1):
+    def get_pred_start(self, start_token="bos", batch_size=1):
         special_tokens = self.special_tokens
         not_coord_token = self.not_coord_token
         max_seq_len = self.max_seq_len
         
-        vertices = torch.stack(
+        values = torch.stack(
             self._padding(
-                [special_tokens["bos"]] * batch_size, 
+                [special_tokens[start_token]] * batch_size, 
                 special_tokens["pad"],
                 max_seq_len
             )
@@ -61,10 +61,10 @@ class Tokenizer(object):
             )
         )
         
-        padding_mask = self._make_padding_mask(vertices, self.pad_id)
+        padding_mask = self._make_padding_mask(values, self.pad_id)
         
         outputs = {
-            "value_tokens": vertices,
+            "value_tokens": values,
             "coord_type_tokens": coord_type_tokens,
             "position_tokens": position_tokens,
             "padding_mask": padding_mask,

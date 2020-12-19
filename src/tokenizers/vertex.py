@@ -4,19 +4,25 @@ from .base import Tokenizer
 
 class EncodeVertexTokenizer(Tokenizer):
     
-    def __init__(self, pad_id=0):
+    def __init__(self, pad_id=0, max_seq_len=None):
         self.pad_token = torch.tensor([pad_id])
         self.pad_id = pad_id
         
+        if max_seq_len is not None:
+            self.max_seq_len = max_seq_len - 1
+        else:
+            self.max_seq_len = max_seq_len
+        
     def tokenize(self, vertices, padding=True):
+        max_seq_len = self.max_seq_len
         vertices = [v.reshape(-1,) + 1 for v in vertices]
         coord_type_tokens = [torch.arange(len(v)) % 3 + 1 for v in vertices]
         position_tokens = [torch.arange(len(v)) // 3 + 1 for v in vertices]
         
         if padding:
-            vertices = torch.stack(self._padding(vertices, self.pad_token))
-            coord_type_tokens = torch.stack(self._padding(coord_type_tokens, self.pad_token))
-            position_tokens = torch.stack(self._padding(position_tokens, self.pad_token))
+            vertices = torch.stack(self._padding(vertices, self.pad_token, max_seq_len))
+            coord_type_tokens = torch.stack(self._padding(coord_type_tokens, self.pad_token, max_seq_len))
+            position_tokens = torch.stack(self._padding(position_tokens, self.pad_token, max_seq_len))
             padding_mask = self._make_padding_mask(vertices, self.pad_id)
             
             outputs = {
@@ -33,8 +39,8 @@ class EncodeVertexTokenizer(Tokenizer):
             }
             
         return outputs
-
     
+
     
 class DecodeVertexTokenizer(Tokenizer):
     
