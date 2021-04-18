@@ -2,5 +2,9 @@
 .ipynb_checkpoints
 __pycache__/
 .DS_Store
-data/
-results/
+data/*
+results/*
+src/utils_blender/localize_dataset.py
+nohup.out
+
+!.gitkeep
