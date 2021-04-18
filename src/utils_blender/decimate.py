@@ -1,9 +1,8 @@
-\0;10;1c# code for blender 2.92.0
+# code for blender 2.92.0
 import os
 import bpy
 import math
 import random
-import functools
 
 
 ANGLE_MIN = 1
