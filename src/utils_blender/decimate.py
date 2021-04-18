@@ -1,4 +1,4 @@
-# code for blender 2.92.0
+\0;10;1c# code for blender 2.92.0
 import os
 import bpy
 import math
@@ -14,12 +14,11 @@ N_V_MAX = 800
 N_F_MAX = 2800
 NUM_AUGMENT = 30
 AUG_TRY_MAX = 50
-PATH_TEXT = "E:\\3d_models\\polygen_pytorch\\data\\objfiles_with_tag.txt"
-TEMP_PATH = "E:\\3d_models\\polygen_pytorch\\data\\blender_preprocessed\\temp.obj"
-OUT_DIR = "E:\\3d_models\\polygen_pytorch\\data\\blender_preprocessed\\{}\\{}"
-SEPARATOR = "\\"
+SEPARATOR = "/"
+PATH_TEXT = "PATH_TO_DATAPATH_TEXT"
+TEMP_PATH = "PATH_TO_TEMP_FILE"
+OUT_DIR = "PATH_TO_OUT_DIR" + SEPARATOR + "{}" + SEPARATOR + "{}"
 OBJ_NAME = "model_normalized"
-
 
 
 
