@@ -196,10 +196,11 @@ class FaceEncoderEmbedding(nn.Module):
             embed [torch.tensor]: (batch, length, embed) shape tensor after embedding.
                         
         """
-        
-        embed = self.value_embed(tokens["value_tokens"]) * self.embed_scaler
-        embed = embed + (self.coord_type_embed(tokens["coord_type_tokens"]) * self.embed_scaler)
-        embed = embed + (self.position_embed(tokens["position_tokens"]) * self.embed_scaler)
+              
+        embed = self.value_embed(tokens["value_tokens"])
+        embed = embed + self.coord_type_embed(tokens["coord_type_tokens"])
+        embed = embed + self.position_embed(tokens["position_tokens"])
+        embed = embed * self.embed_scaler
         
         embed = embed[:, :-1]
         embed = torch.cat([
@@ -274,13 +275,12 @@ class FaceDecoderEmbedding(nn.Module):
         ], dim=0)
         embed = embed * tokens["ref_v_mask"].unsqueeze(dim=2)
         
-        embed = (embed + \
-                (self.value_embed(tokens["ref_e_ids"]) * 
-                 self.embed_scaler *
-                 tokens["ref_e_mask"].unsqueeze(dim=2)))
+        additional_embeddings = self.value_embed(tokens["ref_e_ids"]) * tokens["ref_e_mask"].unsqueeze(dim=2)
+        additional_embeddings = additional_embeddings + self.in_position_embed(tokens["in_position_tokens"])
+        additional_embeddings = additional_embeddings + self.out_position_embed(tokens["out_position_tokens"])
+        additional_embeddings = additional_embeddings * self.embed_scaler
         
-        embed = embed + (self.in_position_embed(tokens["in_position_tokens"]) * self.embed_scaler)
-        embed = embed + (self.out_position_embed(tokens["out_position_tokens"]) * self.embed_scaler)
+        embed = embed + additional_embeddings
         return embed
     
     
@@ -306,7 +306,7 @@ class FacePolyGen(nn.Module):
         self.apply(init_weights)
         self.embed_scaler = math.sqrt(model_config["embed_dim"])
     
-    def forward(self, src_tokens, device=None):
+    def encode(self, src_tokens, device=None):
         
         """forward function which can be used for both train/predict.
         this function only encodes vertex information
@@ -336,9 +336,36 @@ class FacePolyGen(nn.Module):
         )
         hs = self.src_norm(hs)
         
+        # calc pointing to vertex
+        BATCH = hs.shape[0]
+        sptk_embed = self.tgt_embedding.value_embed.weight
+        encoder_embed_with_sptk = torch.cat([
+            sptk_embed[None, ...].repeat(BATCH, 1, 1), hs
+        ], dim=1)
+        
+        print(sptk_embed.abs().mean(), hs.abs().mean())
+        
+        return hs, encoder_embed_with_sptk
+    
+    def decode(self, encoder_embed, encoder_embed_with_sptk, tgt_tokens, pred_idx=None, device=None):
+        hs = self.tgt_embedding(encoder_embed, tgt_tokens)
+        hs = self.tgt_reformer(
+            hs, input_mask=tgt_tokens["padding_mask"]
+        )
+        hs = self.tgt_norm(hs)        
+        
+        if pred_idx is None:
+            hs = torch.bmm(
+                hs, encoder_embed_with_sptk.permute(0, 2, 1))
+        else:
+            hs = torch.bmm(
+                hs[:, pred_idx:pred_idx+1],
+                encoder_embed_with_sptk.permute(0, 2, 1)
+            )
         return hs
         
-    def __call__(self, inputs, device=None):
+        
+    def forward(self, inputs, device=None):
         
         """Calculate loss while training.
         
@@ -368,30 +395,17 @@ class FacePolyGen(nn.Module):
         tgt_tokens = self.tgt_tokenizer.tokenize(inputs["faces"])
         tgt_tokens = {k: v.to(device) for k, v in tgt_tokens.items()}
         
-        encoder_embed = self.forward(src_tokens, device=device)
-        hs = self.tgt_embedding(encoder_embed, tgt_tokens)
-        hs = self.tgt_reformer(
-            hs, input_mask=tgt_tokens["padding_mask"]
-        )
-        hs = self.tgt_norm(hs)
+        encoder_embed, encoder_embed_with_sptk = self.encode(src_tokens, device=device)
+        decoder_embed = self.decode(encoder_embed, encoder_embed_with_sptk, tgt_tokens, device=device)
         
-        # calc pointing to vertex
-        BATCH = hs.shape[0]
-        sptk_embed = self.tgt_embedding.value_embed.weight * self.embed_scaler
-        encoder_embed = torch.cat([
-            sptk_embed[None, ...].repeat(BATCH, 1, 1),
-            encoder_embed
-        ], dim=1)
-        hs = torch.bmm(hs, encoder_embed.permute(0, 2, 1))
-        
-        BATCH, TGT_LENGTH, SRC_LENGTH = hs.shape
-        hs = hs.reshape(BATCH*TGT_LENGTH, SRC_LENGTH)
+        BATCH, TGT_LENGTH, SRC_LENGTH = decoder_embed.shape
+        decoder_embed = decoder_embed.reshape(BATCH*TGT_LENGTH, SRC_LENGTH)
         targets = tgt_tokens["target_tokens"].reshape(BATCH*TGT_LENGTH,)
         
         acc = accuracy(
-            hs, targets, ignore_label=self.tgt_tokenizer.pad_id, device=device
+            decoder_embed, targets, ignore_label=self.tgt_tokenizer.pad_id, device=device
         )
-        loss = self.loss_func(hs, targets)
+        loss = self.loss_func(decoder_embed, targets)
         
         if hasattr(self, 'reporter'):
             self.reporter.report({
@@ -403,7 +417,15 @@ class FacePolyGen(nn.Module):
         return loss
     
     @torch.no_grad()
-    def predict(self, inputs, max_seq_len=3936, device=None):
+    def predict(self, inputs, max_seq_len=3936, top_p=0.9, seed=0, device=None):
+        
+        # setting for sampling reproducibility.
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+        torch.manual_seed(seed)
+        torch.set_deterministic(True)
+        
+        
         tgt_tokenizer = self.tgt_tokenizer
         special_tokens = tgt_tokenizer.special_tokens
         
@@ -411,13 +433,7 @@ class FacePolyGen(nn.Module):
         src_tokens = self.src_tokenizer.tokenize(inputs["vertices"])
         src_tokens = {k: v.to(device) for k, v in src_tokens.items()}
         
-        encoder_embed = self.forward(src_tokens, device=device)
-        BATCH = encoder_embed.shape[0]
-        sptk_embed = self.tgt_embedding.value_embed.weight * self.embed_scaler
-        encoder_embed_with_sptk = torch.cat([
-            sptk_embed[None, ...].repeat(BATCH, 1, 1),
-            encoder_embed
-        ], dim=1)
+        encoder_embed, encoder_embed_with_sptk = self.encode(src_tokens, device=device)
         
         # prepare for generation.
         tgt_tokens = model.tgt_tokenizer.tokenize([[torch.tensor([], dtype=torch.int32)]])
@@ -425,52 +441,63 @@ class FacePolyGen(nn.Module):
         tgt_tokens["ref_e_ids"][:, 1] = model.tgt_tokenizer.special_tokens["pad"]
         tgt_tokens["padding_mask"][:, 1] = True
         
+        output_vocab_length = encoder_embed_with_sptk.shape[1]
         preds = [torch.tensor([], dtype=torch.int32)]
+        history_in_face = torch.zeros((1, output_vocab_length), dtype=torch.bool)
         pred_idx = 0
-        
         now_face_idx = 0
         
-        while (pred_idx <= max_seq_len-1) \
-        and ((len(preds[now_face_idx]) == 0)
-            or (preds[now_face_idx][-1] != special_tokens["eos"])):
-            
-            if pred_idx >= 1:
-                tgt_tokens = tgt_tokenizer.tokenize([[torch.cat([p]) for p in preds]])
-                tgt_tokens["value_tokens"][:, pred_idx+1] = special_tokens["pad"]
-                tgt_tokens["ref_e_ids"][:, pred_idx+1] = special_tokens["pad"]
-                tgt_tokens["padding_mask"][:, pred_idx+1] = True
-            
-            try:
-                hs = self.tgt_embedding(encoder_embed, tgt_tokens)
-            except IndexError:
-                print("pred_ids", pred_idx)
-                for k, v in tgt_tokens.items():
-                    print(k)
-                    print(v.shape)
-                    print(v[:, pred_idx-5:pred_idx+2])
-                print(preds)
-                raise IndexError
-                
-            hs = self.tgt_reformer(
-                hs, input_mask=tgt_tokens["padding_mask"]
-            )
-            hs = self.tgt_norm(hs)
-            
-            hs = torch.bmm(
-                hs[:, pred_idx:pred_idx+1],
-                encoder_embed_with_sptk.permute(0, 2, 1)
-            )
-            pred = hs[:, 0].argmax(dim=1)
-            
-            if pred[0] == special_tokens["bof"]:
-                now_face_idx += 1
-                preds.append(torch.tensor([], dtype=torch.int32))
-            else:
-                preds[now_face_idx] = \
-                    torch.cat([preds[now_face_idx], pred[0, None]-len(special_tokens)])
-            pred_idx += 1
-            
-        preds = torch.cat(preds) + len(special_tokens)
-        preds = self.tgt_tokenizer.detokenize([preds])[0]    
+        try:
+            while (pred_idx <= max_seq_len-1):
+                print(pred_idx, end=", ")
+
+                if pred_idx >= 1:
+                    tgt_tokens = tgt_tokenizer.tokenize([[torch.cat([p]) for p in preds]])
+                    tgt_tokens["value_tokens"][:, pred_idx+1] = special_tokens["pad"]
+                    tgt_tokens["ref_e_ids"][:, pred_idx+1] = special_tokens["pad"]
+                    tgt_tokens["padding_mask"][:, pred_idx+1] = True
+
+                hs = self.decode(encoder_embed, encoder_embed_with_sptk, tgt_tokens, pred_idx=pred_idx, device=device)
+                hs = hs[:, 0]
+
+                ##### greedy sampling
+                # pred = hs.argmax(dim=1)
+
+                ### top-p sampling
+                hs = torch.where(
+                    history_in_face,
+                    torch.full_like(hs, -np.inf, device=device),
+                    hs
+                )
+                probas, indeces = torch.sort(hs, dim=1, descending=True)
+                cum_probas = torch.cumsum(F.softmax(probas, dim=1), dim=1)
+
+                condition = cum_probas <= top_p
+                if condition.sum() == 0:
+                    candidates = torch.full_like(probas, -np.inf, device=device)
+                    candidates[:, 0] = 1.
+                else:
+                    candidates = torch.where(
+                        condition, probas, torch.full_like(probas, -np.inf, device=device)
+                    )
+
+                probas = F.softmax(candidates, dim=1)
+                pred = indeces[0, torch.multinomial(probas, 1).squeeze(dim=1)]
+
+                if pred == special_tokens["eos"]:
+                    break
+                if pred == special_tokens["bof"]:
+                    now_face_idx += 1
+                    history_in_face = torch.arange(output_vocab_length) > preds[-1][0]+len(special_tokens)
+                    history_in_face = history_in_face[None, :]
+                    preds.append(torch.tensor([], dtype=torch.int32))
+                else:
+                    history_in_face[:, pred] = True
+                    preds[now_face_idx] = \
+                        torch.cat([preds[now_face_idx], pred-len(special_tokens)])
+                pred_idx += 1
+        
+        except KeyboardInterrupt:
+            return preds
         
         return preds

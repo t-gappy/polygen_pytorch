@@ -1,10 +1,15 @@
 # code for blender 2.92.0
+# this process was very heavy.
+# you should make threshold by the number of vertex/face to ignore heavy .obj file.
+
+
 import os
 import bpy
 import math
 import random
 
 
+THRESH_VERTEX = 1200
 ANGLE_MIN = 1
 ANGLE_MAX = 20
 RESIZE_MIN = 0.75
@@ -12,7 +17,6 @@ RESIZE_MAX = 1.25
 N_V_MAX = 800
 N_F_MAX = 2800
 NUM_AUGMENT = 30
-AUG_TRY_MAX = 50
 SEPARATOR = "/"
 PATH_TEXT = "PATH_TO_DATAPATH_TEXT"
 TEMP_PATH = "PATH_TO_TEMP_FILE"
@@ -92,6 +96,9 @@ if __name__ == "__main__":
             
             # select object to be decimated.
             bpy.context.view_layer.objects.active = bpy.data.objects[obj_key]
+            if len(bpy.context.object.data.vertices) >= THRESH_VERTEX:
+                break
+            
             
             # setting parameters for preprocess.
             angle_limit = random.randrange(ANGLE_MIN, ANGLE_MAX)
