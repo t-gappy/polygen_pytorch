@@ -343,7 +343,6 @@ class FacePolyGen(nn.Module):
             sptk_embed[None, ...].repeat(BATCH, 1, 1), hs
         ], dim=1)
         
-        print(sptk_embed.abs().mean(), hs.abs().mean())
         
         return hs, encoder_embed_with_sptk
     
